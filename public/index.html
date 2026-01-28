@@ -647,7 +647,7 @@
       const code = document.getElementById('scriptCode');
       if (!siteId) { block.style.display = 'none'; return; }
       block.style.display = 'block';
-      code.textContent = `<script src="${window.location.origin}/t/${siteId}.js"></script>`;
+      code.textContent = `<script src="${window.location.origin}/t/${siteId}.js"></scr` + `ipt>`;
     }
 
     function copyScript() {
