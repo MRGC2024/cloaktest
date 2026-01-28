@@ -1,0 +1,18 @@
+═══════════════════════════════════════════════════════════
+  O QUE INCLUIR AO ZIPAR PARA HOSPEDAGEM (VPS / Railway / etc)
+═══════════════════════════════════════════════════════════
+
+✅ INCLUIR no ZIP:
+   - server.js
+   - package.json
+   - package-lock.json (se existir)
+   - pasta public/ (com index.html e tracker.js)
+   - README.md (opcional)
+   - HOSTGATOR-DEPLOY.md (opcional)
+
+❌ NÃO INCLUIR no ZIP:
+   - node_modules/  (pasta grande - instale no servidor com npm install)
+   - cloaker.db      (banco é criado automaticamente no servidor)
+   - .git/           (se usar Git, não precisa zipar)
+
+Depois de subir: no servidor rode "npm install" e "npm start"

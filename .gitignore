@@ -1,0 +1,8 @@
+# Não enviar para o GitHub / Railway
+node_modules/
+cloaker.db
+.env
+.env.local
+*.log
+.DS_Store
+Thumbs.db
