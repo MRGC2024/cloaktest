@@ -154,6 +154,7 @@
       <li class="nav-item"><a class="nav-link active" data-section="dashboard"><i class="ri-dashboard-3-line"></i> Dashboard</a></li>
       <li class="nav-item"><a class="nav-link" data-section="sites"><i class="ri-global-line"></i> Meus Sites</a></li>
       <li class="nav-item"><a class="nav-link" data-section="visitors"><i class="ri-user-line"></i> Visitantes</a></li>
+      <li class="nav-item"><a class="nav-link" data-section="reports"><i class="ri-file-list-3-line"></i> Permitidos e Bloqueados</a></li>
       <li class="nav-item"><a class="nav-link" data-section="script"><i class="ri-code-s-slash-line"></i> Integração</a></li>
     </ul>
   </aside>
@@ -234,6 +235,49 @@
       </div></div>
     </section>
 
+    <!-- Permitidos e Bloqueados -->
+    <section id="reports" class="section">
+      <div class="header">
+        <h2>Permitidos e Bloqueados</h2>
+        <div class="header-actions">
+          <select class="form-select site-selector" id="reportsSiteFilter" onchange="loadReports()">
+            <option value="all">Todos os Sites</option>
+          </select>
+          <button class="btn btn-primary" onclick="loadReports()"><i class="ri-refresh-line"></i> Atualizar</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title"><i class="ri-check-line" style="color:var(--success)"></i> Visitantes Permitidos (com UTMs e origem)</h3>
+        </div>
+        <div class="card-body">
+          <div class="table-container">
+            <table>
+              <thead><tr><th>Data</th><th>Site</th><th>País</th><th>Dispositivo</th><th>UTM Source</th><th>UTM Medium</th><th>UTM Campaign</th><th>Referrer</th><th>Ações</th></tr></thead>
+              <tbody id="permittedTable"><tr><td colspan="9" class="loading"><div class="spinner"></div></td></tr></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="permittedPagination"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-header">
+          <h3 class="card-title"><i class="ri-forbid-line" style="color:var(--danger)"></i> Visitantes Bloqueados</h3>
+        </div>
+        <div class="card-body">
+          <div class="table-container">
+            <table>
+              <thead><tr><th>Data</th><th>Site</th><th>País</th><th>Motivo do bloqueio</th><th>Dispositivo</th><th>Navegador</th><th>Ações</th></tr></thead>
+              <tbody id="blockedTable"><tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr></tbody>
+            </table>
+          </div>
+          <div class="pagination" id="blockedPagination"></div>
+        </div>
+      </div>
+    </section>
+
     <!-- Script/Integração -->
     <section id="script" class="section">
       <div class="header">
@@ -245,13 +289,14 @@
           <p style="margin-bottom: 20px; line-height: 1.8;">
             <strong>1.</strong> Crie um novo site na aba "Meus Sites"<br>
             <strong>2.</strong> Copie o script gerado para aquele site<br>
-            <strong>3.</strong> Cole no <code>&lt;head&gt;</code> da sua landing page<br>
-            <strong>4.</strong> Pronto! Todos os acessos serão monitorados aqui
+            <strong>3.</strong> Cole como <strong>primeira tag</strong> no <code>&lt;head&gt;</code> da sua landing page (antes de CSS e outros scripts)<br>
+            <strong>4.</strong> Pronto! Quem for bloquear é redirecionado antes de ver o site; quem for permitido vê a página na hora
           </p>
           <div style="background: var(--bg-secondary); padding: 20px; border-radius: 10px; margin-bottom: 20px;">
             <h4 style="margin-bottom: 10px;">📌 Importante</h4>
             <ul style="color: var(--text-secondary); line-height: 1.8; padding-left: 20px;">
               <li>Cada site tem seu próprio ID e configurações</li>
+              <li>Coloque o script como <strong>primeira tag</strong> no &lt;head&gt; para quem for bloquear não ver nada do site</li>
               <li>Você pode ter quantos sites quiser</li>
               <li>As configurações de bloqueio são individuais por site</li>
               <li>Todos os dados aparecem no mesmo painel</li>
@@ -304,8 +349,8 @@
           <div class="info-item"><span class="info-label">Bloquear DevTools</span><label class="switch"><input type="checkbox" id="siteBlockDevtools" checked><span class="slider"></span></label></div>
         </div>
         <div class="form-group" style="margin-top: 20px;">
-          <label class="form-label">Países Permitidos (ex: BR,PT - vazio = todos)</label>
-          <input type="text" class="form-input" id="siteAllowedCountries" placeholder="Deixe vazio para permitir todos">
+          <label class="form-label">Países Permitidos (ex: BR ou BR,PT – padrão: apenas Brasil)</label>
+          <input type="text" class="form-input" id="siteAllowedCountries" placeholder="BR" value="BR">
         </div>
         <div class="form-group">
           <label class="form-label">Países Bloqueados (ex: US,UK)</label>
@@ -331,6 +376,8 @@
     let currentPeriod = '24h';
     let currentFilter = 'all';
     let currentPage = 1;
+    let permittedPage = 1;
+    let blockedPage = 1;
     let charts = {};
     let sites = [];
 
@@ -345,6 +392,7 @@
         if (section === 'dashboard') refreshStats();
         if (section === 'sites') loadSites();
         if (section === 'visitors') loadVisitors();
+        if (section === 'reports') loadReports();
         if (section === 'script') loadScriptSection();
       });
     });
@@ -379,7 +427,7 @@
     }
 
     function updateSiteSelectors() {
-      const selectors = ['dashboardSiteFilter', 'visitorsSiteFilter', 'scriptSiteSelector'];
+      const selectors = ['dashboardSiteFilter', 'visitorsSiteFilter', 'reportsSiteFilter', 'scriptSiteSelector'];
       selectors.forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
@@ -436,7 +484,7 @@
       document.getElementById('siteBlockFacebook').checked = true;
       document.getElementById('siteBlockBots').checked = true;
       document.getElementById('siteBlockDevtools').checked = true;
-      document.getElementById('siteAllowedCountries').value = '';
+      document.getElementById('siteAllowedCountries').value = 'BR';
       document.getElementById('siteBlockedCountries').value = '';
       document.getElementById('siteModal').classList.add('active');
     }
@@ -597,6 +645,88 @@
     }
 
     function goToPage(p) { currentPage = p; loadVisitors(); }
+
+    // Relatório Permitidos e Bloqueados
+    async function loadReports() {
+      loadPermitted();
+      loadBlocked();
+    }
+
+    async function loadPermitted() {
+      const siteId = document.getElementById('reportsSiteFilter').value;
+      const tbody = document.getElementById('permittedTable');
+      tbody.innerHTML = '<tr><td colspan="9" class="loading"><div class="spinner"></div></td></tr>';
+      try {
+        const res = await fetch(`/api/visitors?page=${permittedPage}&filter=allowed&site=${siteId}&limit=25`);
+        const data = await res.json();
+        if (data.visitors.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-secondary)">Nenhum visitante permitido</td></tr>';
+          document.getElementById('permittedPagination').innerHTML = '';
+          return;
+        }
+        tbody.innerHTML = data.visitors.map(v => `
+          <tr>
+            <td>${new Date(v.created_at).toLocaleString('pt-BR')}</td>
+            <td><span class="badge badge-info">${v.site_id || 'default'}</span></td>
+            <td>${v.country || '-'}</td>
+            <td><i class="ri-${v.device_type === 'mobile' ? 'smartphone' : 'computer'}-line"></i> ${v.device_type || 'desktop'}</td>
+            <td>${v.utm_source || '-'}</td>
+            <td>${v.utm_medium || '-'}</td>
+            <td>${v.utm_campaign || '-'}</td>
+            <td title="${(v.referrer || '').replace(/"/g, '')}">${v.referrer ? (v.referrer.length > 40 ? v.referrer.substring(0, 40) + '...' : v.referrer) : '-'}</td>
+            <td><button class="btn btn-secondary btn-sm" onclick="viewVisitor(${v.id})"><i class="ri-eye-line"></i></button></td>
+          </tr>
+        `).join('');
+        let pag = '';
+        if (data.pages > 1) {
+          pag = `<button class="page-btn" ${permittedPage <= 1 ? 'disabled' : ''} onclick="permittedPage=${permittedPage-1};loadPermitted()"><i class="ri-arrow-left-line"></i></button>`;
+          for (let i = 1; i <= data.pages; i++) {
+            if (i === 1 || i === data.pages || (i >= permittedPage - 2 && i <= permittedPage + 2)) {
+              pag += `<button class="page-btn ${i === permittedPage ? 'active' : ''}" onclick="permittedPage=${i};loadPermitted()">${i}</button>`;
+            } else if (i === permittedPage - 3 || i === permittedPage + 3) pag += '<span style="color:var(--text-secondary)">...</span>';
+          }
+          pag += `<button class="page-btn" ${permittedPage >= data.pages ? 'disabled' : ''} onclick="permittedPage=${permittedPage+1};loadPermitted()"><i class="ri-arrow-right-line"></i></button>`;
+        }
+        document.getElementById('permittedPagination').innerHTML = pag;
+      } catch (e) { console.error(e); tbody.innerHTML = '<tr><td colspan="9" style="color:var(--danger)">Erro ao carregar</td></tr>'; }
+    }
+
+    async function loadBlocked() {
+      const siteId = document.getElementById('reportsSiteFilter').value;
+      const tbody = document.getElementById('blockedTable');
+      tbody.innerHTML = '<tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr>';
+      try {
+        const res = await fetch(`/api/visitors?page=${blockedPage}&filter=blocked&site=${siteId}&limit=25`);
+        const data = await res.json();
+        if (data.visitors.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-secondary)">Nenhum visitante bloqueado</td></tr>';
+          document.getElementById('blockedPagination').innerHTML = '';
+          return;
+        }
+        tbody.innerHTML = data.visitors.map(v => `
+          <tr>
+            <td>${new Date(v.created_at).toLocaleString('pt-BR')}</td>
+            <td><span class="badge badge-info">${v.site_id || 'default'}</span></td>
+            <td>${v.country || '-'}</td>
+            <td><span class="badge badge-danger" title="${(v.block_reason || '').replace(/"/g, '')}">${v.block_reason ? (v.block_reason.length > 35 ? v.block_reason.substring(0, 35) + '...' : v.block_reason) : '-'}</span></td>
+            <td><i class="ri-${v.device_type === 'mobile' ? 'smartphone' : 'computer'}-line"></i> ${v.device_type || 'desktop'}</td>
+            <td>${v.browser || '-'}</td>
+            <td><button class="btn btn-secondary btn-sm" onclick="viewVisitor(${v.id})"><i class="ri-eye-line"></i></button></td>
+          </tr>
+        `).join('');
+        let pag = '';
+        if (data.pages > 1) {
+          pag = `<button class="page-btn" ${blockedPage <= 1 ? 'disabled' : ''} onclick="blockedPage=${blockedPage-1};loadBlocked()"><i class="ri-arrow-left-line"></i></button>`;
+          for (let i = 1; i <= data.pages; i++) {
+            if (i === 1 || i === data.pages || (i >= blockedPage - 2 && i <= blockedPage + 2)) {
+              pag += `<button class="page-btn ${i === blockedPage ? 'active' : ''}" onclick="blockedPage=${i};loadBlocked()">${i}</button>`;
+            } else if (i === blockedPage - 3 || i === blockedPage + 3) pag += '<span style="color:var(--text-secondary)">...</span>';
+          }
+          pag += `<button class="page-btn" ${blockedPage >= data.pages ? 'disabled' : ''} onclick="blockedPage=${blockedPage+1};loadBlocked()"><i class="ri-arrow-right-line"></i></button>`;
+        }
+        document.getElementById('blockedPagination').innerHTML = pag;
+      } catch (e) { console.error(e); tbody.innerHTML = '<tr><td colspan="7" style="color:var(--danger)">Erro ao carregar</td></tr>'; }
+    }
 
     async function viewVisitor(id) {
       document.getElementById('visitorModal').classList.add('active');

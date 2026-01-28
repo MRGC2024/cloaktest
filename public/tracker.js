@@ -2,17 +2,23 @@
  * 🔒 CLOAKER PRO - Script de Tracking e Proteção
  * 
  * COMO USAR:
- * Cole este código no <head> do seu site, substituindo:
- * - SERVIDOR_URL: URL do seu painel (ex: https://meu-cloaker.com)
- * - SEU_SITE_ID: ID do site criado no painel
+ * Cole este script como PRIMEIRA tag no <head> do seu site (antes de CSS/outros scripts),
+ * para que a página fique oculta até a decisão de bloquear ou permitir.
  * 
  * <script src="https://SERVIDOR_URL/t/SEU_SITE_ID.js"></script>
- * 
- * Ou cole o script completo diretamente:
  */
 
 (function() {
   'use strict';
+
+  // 🚨 IMEDIATO: esconde a página ANTES de qualquer coisa (visitante não vê o site)
+  (function hidePageNow() {
+    var d = document.documentElement;
+    if (d) {
+      d.style.setProperty('visibility', 'hidden', 'important');
+      d.style.setProperty('opacity', '0', 'important');
+    }
+  })();
 
   // ⚙️ CONFIGURAÇÃO - O script detecta automaticamente pelo URL ou use os valores abaixo
   const SCRIPT_SRC = document.currentScript?.src || '';
@@ -29,11 +35,20 @@
     BLOCK_BOTS: true,
     BLOCK_DEVTOOLS: true,
     BLOCK_RIGHT_CLICK: true,
-    ALLOWED_COUNTRIES: [],
+    ALLOWED_COUNTRIES: ['BR'],
     BLOCKED_COUNTRIES: []
   };
 
   let serverConfig = null;
+
+  // 👁️ Mostrar a página (só chamar quando visitante for permitido)
+  function showPage() {
+    var d = document.documentElement;
+    if (d) {
+      d.style.removeProperty('visibility');
+      d.style.removeProperty('opacity');
+    }
+  }
 
   // 🔄 Carregar configurações do servidor
   async function loadConfig() {
@@ -118,8 +133,8 @@
 
   // 📍 Detectar Facebook
   function isFromFacebook() {
-    const ref = document.referrer.toLowerCase();
-    const url = window.location.href.toLowerCase();
+    const ref = (document.referrer || '').toLowerCase();
+    const url = (window.location.href || '').toLowerCase();
     return ref.includes('facebook.com') || ref.includes('fb.com') || url.includes('fbclid=');
   }
 
@@ -285,8 +300,29 @@
     }, 1000);
   }
 
+  // ⚡ BLOQUEIO IMEDIATO (sem rede, sem delay) – decide em milissegundos
+  function shouldBlockSync() {
+    const device = getDeviceInfo();
+    if (CONFIG.BLOCK_DESKTOP && device.isDesktop) return { block: true, reason: 'Desktop detectado' };
+    if (CONFIG.BLOCK_FACEBOOK_LIBRARY && isFromFacebook() && device.isDesktop) return { block: true, reason: 'Biblioteca Facebook' };
+    const botCheck = detectBot();
+    if (CONFIG.BLOCK_BOTS && botCheck.isBot) return { block: true, reason: botCheck.reason };
+    return { block: false, reason: null };
+  }
+
   // 🚀 INICIALIZAÇÃO
   async function init() {
+    // 1) Decisão instantânea: se for bloquear, redireciona ANTES de mostrar qualquer coisa
+    var syncCheck = shouldBlockSync();
+    if (syncCheck.block) {
+      window.location.replace(CONFIG.REDIRECT_URL);
+      return;
+    }
+
+    // 2) Visitante passou no filtro rápido → mostra a página AGORA (sem esperar rede)
+    showPage();
+
+    // 3) Em background: carrega config, geo, envia tracking (não bloqueia a tela)
     await loadConfig();
 
     const device = getDeviceInfo();
