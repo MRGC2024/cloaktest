@@ -195,8 +195,9 @@ async function initDb() {
     )
   `);
 
-  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'user', status TEXT DEFAULT 'active', created_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
+  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'user', status TEXT DEFAULT 'active', cloaker_base_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
   try { db.run('ALTER TABLE users ADD COLUMN status TEXT DEFAULT \'active\''); } catch (e) {}
+  try { db.run('ALTER TABLE users ADD COLUMN cloaker_base_url TEXT'); } catch (e) {}
   db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
   try { db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('cloaker_base_url', '')"); } catch (e) {}
 
@@ -286,20 +287,18 @@ app.post('/api/setup', (req, res) => {
   res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
 });
 
-// API: Configurações (domínio do cloaker)
+// API: Configurações (domínio do cloaker – por usuário: cada user tem seu próprio domínio)
 app.get('/api/settings', (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
-  const rows = all('SELECT key, value FROM settings');
-  const settings = {};
-  rows.forEach(r => { settings[r.key] = r.value; });
-  res.json(settings);
+  const user = get('SELECT cloaker_base_url FROM users WHERE id = ?', [req.session.userId]);
+  res.json({ cloaker_base_url: (user && user.cloaker_base_url) ? user.cloaker_base_url : '' });
 });
 
 app.put('/api/settings', (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
   const { cloaker_base_url } = req.body || {};
   const val = (cloaker_base_url != null ? String(cloaker_base_url).trim() : '') || '';
-  run("INSERT OR REPLACE INTO settings (key, value) VALUES ('cloaker_base_url', ?)", [val]);
+  run('UPDATE users SET cloaker_base_url = ? WHERE id = ?', [val, req.session.userId]);
   res.json({ success: true });
 });
 

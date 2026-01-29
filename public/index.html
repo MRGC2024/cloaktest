@@ -164,7 +164,7 @@
       <li class="nav-item"><a class="nav-link" data-section="visitors"><i class="ri-user-line"></i> Visitantes</a></li>
       <li class="nav-item"><a class="nav-link" data-section="reports"><i class="ri-file-list-3-line"></i> Permitidos e Bloqueados</a></li>
       <li class="nav-item"><a class="nav-link" data-section="script"><i class="ri-link"></i> Link para Ads</a></li>
-      <li class="nav-item" id="navConfig" style="display:none"><a class="nav-link" data-section="settings"><i class="ri-settings-3-line"></i> Configurações</a></li>
+      <li class="nav-item"><a class="nav-link" data-section="settings"><i class="ri-settings-3-line"></i> Configurações</a></li>
       <li class="nav-item" id="navUsers" style="display:none"><a class="nav-link" data-section="users"><i class="ri-team-line"></i> Usuários</a></li>
     </ul>
     <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
@@ -386,22 +386,42 @@
       </div>
     </section>
 
-    <!-- Configurações (domínio do cloaker) -->
+    <!-- Configurações (domínio do cloaker – por usuário) -->
     <section id="settings" class="section">
       <div class="header">
         <h2>Configurações</h2>
       </div>
       <div class="card">
-        <div class="card-header"><h3 class="card-title"><i class="ri-global-line"></i> Domínio do Cloaker</h3></div>
+        <div class="card-header"><h3 class="card-title"><i class="ri-global-line"></i> Meu domínio do Cloaker</h3></div>
         <div class="card-body">
-          <p style="color: var(--text-secondary); margin-bottom: 15px;">Configure o domínio que você vai usar para os links do cloaker. Aponte o DNS (CNAME) do seu domínio para o servidor onde o painel está hospedado (ex.: Railway) e informe a URL completa aqui. Os links gerados em "Meus Sites" e "Link para Ads" usarão esse domínio.</p>
+          <p style="color: var(--text-secondary); margin-bottom: 15px;">Cada usuário tem seu próprio domínio. Configure aqui o domínio que <strong>você</strong> vai usar nos links do cloaker. Os links gerados em "Meus Sites" e "Link para Ads" usarão este domínio na sua conta.</p>
           <div class="form-group">
-            <label class="form-label">URL base do Cloaker (ex: https://cloaker.seudominio.com)</label>
+            <label class="form-label">URL base do seu Cloaker (ex: https://cloaker.seudominio.com)</label>
             <input type="url" class="form-input" id="cloakerBaseUrl" placeholder="https://cloaker.seudominio.com">
-            <small style="color: var(--text-secondary); font-size: 12px;">Deixe em branco para usar o domínio atual do painel.</small>
+            <small style="color: var(--text-secondary); font-size: 12px;">Deixe em branco para usar o domínio padrão do painel.</small>
           </div>
           <button class="btn btn-primary" onclick="saveSettings()"><i class="ri-save-line"></i> Salvar</button>
           <span id="settingsMsg" style="margin-left: 15px; font-size: 13px;"></span>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3 class="card-title"><i class="ri-file-list-3-line"></i> Como associar meu domínio (passo a passo)</h3></div>
+        <div class="card-body">
+          <ol style="color: var(--text-secondary); line-height: 2; padding-left: 20px; margin-bottom: 15px;">
+            <li><strong>Tenha um domínio</strong> (ex: meusite.com.br). Você pode usar um subdomínio (ex: cloaker.meusite.com.br ou go.meusite.com.br).</li>
+            <li><strong>Acesse o painel do seu provedor de DNS</strong> (onde o domínio está registrado: Registro.br, Cloudflare, GoDaddy, HostGator, etc.).</li>
+            <li><strong>Crie um registro CNAME:</strong>
+              <ul style="margin-top: 8px; margin-bottom: 8px;">
+                <li><strong>Nome/Host:</strong> o subdomínio que você quer usar (ex: <code>cloaker</code> ou <code>go</code>). Se for usar o domínio raiz (meusite.com.br), use <code>@</code> ou consulte a documentação do seu DNS – alguns exigem A/ALIAS em vez de CNAME.</li>
+                <li><strong>Valor/Destino:</strong> aponte para o servidor do painel. No <strong>Railway</strong>, use: <code>cloaktest-production.up.railway.app</code> (ou o host que aparecer na URL do seu painel, ex: <code>seu-app.up.railway.app</code>).</li>
+              </ul>
+            </li>
+            <li><strong>Aguarde a propagação do DNS</strong> (pode levar de alguns minutos a 48 horas). Você pode testar com <code>nslookup cloaker.seudominio.com</code> no terminal.</li>
+            <li><strong>Use HTTPS:</strong> se seu provedor oferecer SSL (ex: Cloudflare “Flexible” ou “Full”), ative. A URL final deve ser <code>https://cloaker.seudominio.com</code>.</li>
+            <li><strong>No painel, em Configurações</strong>, preencha o campo acima com a URL completa, por exemplo: <code>https://cloaker.seudominio.com</code> (sem barra no final). Clique em <strong>Salvar</strong>.</li>
+            <li>Pronto. Ao gerar links em <strong>Meus Sites</strong> ou <strong>Link para Ads</strong>, os links sairão como <code>https://cloaker.seudominio.com/go/XXXXX</code>.</li>
+          </ol>
+          <p style="color: var(--text-secondary); font-size: 13px;"><strong>Exemplo:</strong> Se seu domínio é <code>minhaempresa.com</code> e você criou o CNAME <code>cloaker</code> apontando para <code>cloaktest-production.up.railway.app</code>, coloque aqui: <code>https://cloaker.minhaempresa.com</code>.</p>
         </div>
       </div>
     </section>
@@ -1196,8 +1216,8 @@
         if (meRes && meRes.ok) {
           currentUser = await meRes.json();
           if (currentUser && currentUser.role === 'admin') {
-            var nc = document.getElementById('navConfig'); var nu = document.getElementById('navUsers');
-            if (nc) nc.style.display = 'block'; if (nu) nu.style.display = 'block';
+            var nu = document.getElementById('navUsers');
+            if (nu) nu.style.display = 'block';
           }
         }
         const setRes = await apiGet('/api/settings');
