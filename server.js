@@ -4,17 +4,26 @@ const cors = require('cors');
 const UAParser = require('ua-parser-js');
 const path = require('path');
 const fs = require('fs');
+const bcrypt = require('bcryptjs');
+const session = require('express-session');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const SESSION_SECRET = process.env.SESSION_SECRET || 'cloaker-pro-secret-change-in-production';
 // Railway: usa volume para persistir o banco; local: usa a pasta do projeto
 const DB_PATH = process.env.RAILWAY_VOLUME_MOUNT_PATH
   ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'cloaker.db')
   : path.join(__dirname, 'cloaker.db');
 
 // Middleware
-app.use(cors());
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
+app.use(session({
+  secret: SESSION_SECRET,
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: process.env.NODE_ENV === 'production', httpOnly: true, maxAge: 7 * 24 * 60 * 60 * 1000 }
+}));
 app.use(express.static('public'));
 
 let db;
@@ -177,9 +186,137 @@ async function initDb() {
     )
   `);
 
+  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'user', created_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
+  db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
+  try { db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('cloaker_base_url', '')"); } catch (e) {}
+
   saveDb();
   console.log('✅ Banco de dados inicializado');
 }
+
+// Autenticação: exige sessão para / e /api/* (exceto login, setup, config, go, t)
+function requireAuth(req, res, next) {
+  if (req.session && req.session.userId) return next();
+  if (req.path === '/login' || req.path.startsWith('/go/') || req.path.startsWith('/t/')) return next();
+  if (req.path === '/api/login' || req.path === '/api/logout' || req.path === '/api/setup' || req.path === '/api/config/') return next();
+  if (req.path.startsWith('/api/') && req.method === 'GET' && req.path === '/api/config/' + (req.params && req.params.siteId ? req.params.siteId : '')) return next();
+  if (req.path.startsWith('/api/')) {
+    if (req.path === '/api/login' || req.path === '/api/setup') return next();
+    return res.status(401).json({ error: 'Não autorizado' });
+  }
+  return res.redirect('/login');
+}
+
+function requireAdmin(req, res, next) {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const user = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  next();
+}
+
+app.use((req, res, next) => {
+  if (req.path === '/login' && req.method === 'GET') return next();
+  if (req.path.startsWith('/go/') || req.path.startsWith('/t/')) return next();
+  if (req.path.match(/^\/api\/config\//) && req.method === 'GET') return next();
+  if (req.path === '/' && req.method === 'GET' && (!req.session || !req.session.userId)) return res.redirect('/login');
+  if (req.path === '/api/login' || req.path === '/api/setup' || req.path === '/api/setup/check') return next();
+  if (req.path.startsWith('/api/') && !req.session?.userId) return res.status(401).json({ error: 'Não autorizado' });
+  next();
+});
+
+// Página de login
+app.get('/login', (req, res) => {
+  if (req.session && req.session.userId) return res.redirect('/');
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+// API: Login
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password) return res.status(400).json({ error: 'Usuário e senha obrigatórios' });
+  const user = get('SELECT id, username, role, password_hash FROM users WHERE username = ?', [username.trim()]);
+  if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  req.session.userId = user.id;
+  req.session.userRole = user.role;
+  res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+});
+
+// API: Logout
+app.post('/api/logout', (req, res) => {
+  req.session.destroy(() => {});
+  res.json({ success: true });
+});
+
+// API: Usuário atual
+app.get('/api/me', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const user = get('SELECT id, username, role, created_at FROM users WHERE id = ?', [req.session.userId]);
+  if (!user) return res.status(401).json({ error: 'Não autorizado' });
+  res.json(user);
+});
+
+// API: Verificar se precisa de setup (sem auth)
+app.get('/api/setup/check', (req, res) => {
+  const count = get('SELECT COUNT(*) as c FROM users');
+  res.json({ setupRequired: !count || count.c === 0 });
+});
+
+// API: Setup inicial (criar primeiro admin se não existir usuários)
+app.post('/api/setup', (req, res) => {
+  const count = get('SELECT COUNT(*) as c FROM users');
+  if (count && count.c > 0) return res.status(400).json({ error: 'Sistema já configurado' });
+  const { username, password } = req.body || {};
+  if (!username || !password || username.length < 2 || password.length < 6) return res.status(400).json({ error: 'Usuário (mín. 2 caracteres) e senha (mín. 6 caracteres) obrigatórios' });
+  const hash = bcrypt.hashSync(password.trim(), 10);
+  run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', [username.trim(), hash, 'admin']);
+  const user = get('SELECT id, username, role FROM users WHERE username = ?', [username.trim()]);
+  req.session.userId = user.id;
+  req.session.userRole = user.role;
+  res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
+});
+
+// API: Configurações (domínio do cloaker)
+app.get('/api/settings', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const rows = all('SELECT key, value FROM settings');
+  const settings = {};
+  rows.forEach(r => { settings[r.key] = r.value; });
+  res.json(settings);
+});
+
+app.put('/api/settings', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const { cloaker_base_url } = req.body || {};
+  const val = (cloaker_base_url != null ? String(cloaker_base_url).trim() : '') || '';
+  run("INSERT OR REPLACE INTO settings (key, value) VALUES ('cloaker_base_url', ?)", [val]);
+  res.json({ success: true });
+});
+
+// API: Listar usuários (admin)
+app.get('/api/users', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const user = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const users = all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC');
+  res.json(users);
+});
+
+// API: Criar usuário (admin)
+app.post('/api/users', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const { username, password, role } = req.body || {};
+  if (!username || !password || username.trim().length < 2 || password.length < 6) return res.status(400).json({ error: 'Usuário (mín. 2 caracteres) e senha (mín. 6 caracteres) obrigatórios' });
+  const hash = bcrypt.hashSync(password, 10);
+  try {
+    run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', [username.trim(), hash, role === 'admin' ? 'admin' : 'user']);
+    const u = get('SELECT id, username, role, created_at FROM users WHERE username = ?', [username.trim()]);
+    res.json(u);
+  } catch (e) {
+    res.status(400).json({ error: 'Usuário já existe' });
+  }
+});
 
 // API: Buscar configurações do site (para o script)
 app.get('/api/config/:siteId', (req, res) => {
@@ -415,22 +552,23 @@ app.get('/api/visitors', (req, res) => {
   });
 });
 
-// API: Estatísticas
+// API: Estatísticas (período por dia: hoje, ontem, 7, 15, 30 dias)
 app.get('/api/stats', (req, res) => {
-  const period = req.query.period || '24h';
+  const period = req.query.period || 'today';
   const siteId = req.query.site || null;
   
-  let dateFilter = '';
+  let dateCondition = '';
   switch (period) {
-    case '1h': dateFilter = "datetime('now', '-1 hour')"; break;
-    case '24h': dateFilter = "datetime('now', '-1 day')"; break;
-    case '7d': dateFilter = "datetime('now', '-7 days')"; break;
-    case '30d': dateFilter = "datetime('now', '-30 days')"; break;
-    default: dateFilter = "datetime('now', '-1 day')";
+    case 'today':   dateCondition = "created_at >= date('now') AND created_at <= datetime('now')"; break;
+    case 'yesterday': dateCondition = "created_at >= date('now', '-1 day') AND created_at < date('now')"; break;
+    case '7d':      dateCondition = "created_at >= datetime('now', '-7 days')"; break;
+    case '15d':     dateCondition = "created_at >= datetime('now', '-15 days')"; break;
+    case '30d':     dateCondition = "created_at >= datetime('now', '-30 days')"; break;
+    default:       dateCondition = "created_at >= date('now') AND created_at <= datetime('now')";
   }
 
   const siteFilter = siteId && siteId !== 'all' ? ` AND site_id = '${siteId}'` : '';
-  const baseWhere = `WHERE created_at >= ${dateFilter}${siteFilter}`;
+  const baseWhere = `WHERE (${dateCondition})${siteFilter}`;
 
   const stats = {
     total: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere}`)?.count || 0,
@@ -446,7 +584,7 @@ app.get('/api/stats', (req, res) => {
     byReferrer: all(`SELECT referrer, COUNT(*) as count FROM visitors ${baseWhere} AND referrer IS NOT NULL AND referrer != '' GROUP BY referrer ORDER BY count DESC LIMIT 10`),
     byHour: all(`SELECT strftime('%Y-%m-%d %H:00', created_at) as hour, COUNT(*) as total, SUM(CASE WHEN was_blocked = 1 THEN 1 ELSE 0 END) as blocked, SUM(CASE WHEN was_blocked = 0 THEN 1 ELSE 0 END) as allowed FROM visitors ${baseWhere} GROUP BY hour ORDER BY hour DESC LIMIT 24`),
     blockReasons: all(`SELECT block_reason, COUNT(*) as count FROM visitors ${baseWhere} AND was_blocked = 1 AND block_reason IS NOT NULL GROUP BY block_reason ORDER BY count DESC`),
-    bySite: all(`SELECT site_id, COUNT(*) as count FROM visitors WHERE created_at >= ${dateFilter} GROUP BY site_id ORDER BY count DESC`)
+    bySite: all(`SELECT site_id, COUNT(*) as count FROM visitors WHERE (${dateCondition}) GROUP BY site_id ORDER BY count DESC`)
   };
 
   res.json(stats);
