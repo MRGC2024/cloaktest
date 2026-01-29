@@ -186,7 +186,8 @@ async function initDb() {
     )
   `);
 
-  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'user', created_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
+  db.run(`CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, username TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, role TEXT DEFAULT 'user', status TEXT DEFAULT 'active', created_at TEXT DEFAULT CURRENT_TIMESTAMP)`);
+  try { db.run('ALTER TABLE users ADD COLUMN status TEXT DEFAULT \'active\''); } catch (e) {}
   db.run(`CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)`);
   try { db.run("INSERT OR IGNORE INTO settings (key, value) VALUES ('cloaker_base_url', '')"); } catch (e) {}
 
@@ -219,7 +220,7 @@ app.use((req, res, next) => {
   if (req.path.startsWith('/go/') || req.path.startsWith('/t/')) return next();
   if (req.path.match(/^\/api\/config\//) && req.method === 'GET') return next();
   if (req.path === '/' && req.method === 'GET' && (!req.session || !req.session.userId)) return res.redirect('/login');
-  if (req.path === '/api/login' || req.path === '/api/setup' || req.path === '/api/setup/check') return next();
+  if (req.path === '/api/login' || req.path === '/api/setup' || req.path === '/api/setup/check' || req.path === '/api/signup') return next();
   if (req.path.startsWith('/api/') && !req.session?.userId) return res.status(401).json({ error: 'Não autorizado' });
   next();
 });
@@ -234,8 +235,9 @@ app.get('/login', (req, res) => {
 app.post('/api/login', (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'Usuário e senha obrigatórios' });
-  const user = get('SELECT id, username, role, password_hash FROM users WHERE username = ?', [username.trim()]);
+  const user = get('SELECT id, username, role, status, password_hash FROM users WHERE username = ?', [username.trim()]);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Usuário ou senha inválidos' });
+  if ((user.status || 'active') !== 'active') return res.status(403).json({ error: 'Conta aguardando aprovação do administrador.' });
   req.session.userId = user.id;
   req.session.userRole = user.role;
   res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
@@ -292,16 +294,54 @@ app.put('/api/settings', (req, res) => {
   res.json({ success: true });
 });
 
-// API: Listar usuários (admin)
+// API: Solicitar conta (público – cria usuário com status pending)
+app.post('/api/signup', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!username || !password || username.trim().length < 2 || password.length < 6) return res.status(400).json({ error: 'Usuário (mín. 2 caracteres) e senha (mín. 6 caracteres) obrigatórios' });
+  const exists = get('SELECT id FROM users WHERE username = ?', [username.trim()]);
+  if (exists) return res.status(400).json({ error: 'Este usuário já está cadastrado.' });
+  const hash = bcrypt.hashSync(password, 10);
+  try {
+    run('INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, ?)', [username.trim(), hash, 'user', 'pending']);
+    res.json({ success: true, message: 'Solicitação enviada. Aguarde a aprovação do administrador.' });
+  } catch (e) {
+    res.status(400).json({ error: 'Erro ao solicitar conta.' });
+  }
+});
+
+// API: Listar usuários (admin – ativos e pendentes)
 app.get('/api/users', (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
   const user = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
   if (!user || user.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
-  const users = all('SELECT id, username, role, created_at FROM users ORDER BY created_at DESC');
+  const users = all('SELECT id, username, role, status, created_at FROM users ORDER BY status ASC, created_at DESC');
   res.json(users);
 });
 
-// API: Criar usuário (admin)
+// API: Aprovar usuário (admin)
+app.post('/api/users/:id/approve', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  run('UPDATE users SET status = ? WHERE id = ?', ['active', id]);
+  const u = get('SELECT id, username, role, status, created_at FROM users WHERE id = ?', [id]);
+  res.json(u || { success: true });
+});
+
+// API: Rejeitar/remover solicitação (admin)
+app.post('/api/users/:id/reject', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  run('DELETE FROM users WHERE id = ? AND status = ?', [id, 'pending']);
+  res.json({ success: true });
+});
+
+// API: Criar usuário (admin – já ativo)
 app.post('/api/users', (req, res) => {
   if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
   const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
@@ -310,8 +350,8 @@ app.post('/api/users', (req, res) => {
   if (!username || !password || username.trim().length < 2 || password.length < 6) return res.status(400).json({ error: 'Usuário (mín. 2 caracteres) e senha (mín. 6 caracteres) obrigatórios' });
   const hash = bcrypt.hashSync(password, 10);
   try {
-    run('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)', [username.trim(), hash, role === 'admin' ? 'admin' : 'user']);
-    const u = get('SELECT id, username, role, created_at FROM users WHERE username = ?', [username.trim()]);
+    run('INSERT INTO users (username, password_hash, role, status) VALUES (?, ?, ?, ?)', [username.trim(), hash, role === 'admin' ? 'admin' : 'user', 'active']);
+    const u = get('SELECT id, username, role, status, created_at FROM users WHERE username = ?', [username.trim()]);
     res.json(u);
   } catch (e) {
     res.status(400).json({ error: 'Usuário já existe' });

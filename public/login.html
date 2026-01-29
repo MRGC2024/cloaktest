@@ -43,6 +43,21 @@
       <button type="submit" class="btn"><i class="ri-login-box-line"></i> Entrar</button>
       <div id="loginMsg" class="msg"></div>
     </form>
+    <div id="signupBox" style="margin-top: 25px; padding-top: 25px; border-top: 1px solid #2a2a4a;">
+      <div class="setup-title">Não tem conta? Solicite acesso (o administrador irá aprovar):</div>
+      <form id="signupForm">
+        <div class="form-group">
+          <label class="form-label">Usuário desejado</label>
+          <input type="text" class="form-input" id="signupUsername" required minlength="2" placeholder="nome de login">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Senha (mín. 6 caracteres)</label>
+          <input type="password" class="form-input" id="signupPassword" required minlength="6" placeholder="••••••••">
+        </div>
+        <button type="submit" class="btn" style="background: var(--bg-card); border: 1px solid #2a2a4a;"><i class="ri-user-add-line"></i> Solicitar acesso</button>
+        <div id="signupMsg" class="msg"></div>
+      </form>
+    </div>
     <div id="setupBox">
       <div class="setup-title">Primeiro acesso? Crie o usuário administrador:</div>
       <form id="setupForm">
@@ -63,6 +78,27 @@
     var loginMsg = document.getElementById('loginMsg');
     var setupBox = document.getElementById('setupBox');
     var setupMsg = document.getElementById('setupMsg');
+    var signupMsg = document.getElementById('signupMsg');
+
+    document.getElementById('signupForm').addEventListener('submit', function(e) {
+      e.preventDefault();
+      signupMsg.className = 'msg'; signupMsg.textContent = '';
+      var form = document.getElementById('signupForm');
+      fetch('/api/signup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: document.getElementById('signupUsername').value.trim(), password: document.getElementById('signupPassword').value })
+      }).then(function(r) {
+        return r.json().then(function(data) {
+          if (r.ok) {
+            signupMsg.className = 'msg success'; signupMsg.textContent = data.message || 'Solicitação enviada. Aguarde a aprovação.';
+            document.getElementById('signupUsername').value = ''; document.getElementById('signupPassword').value = '';
+          } else {
+            signupMsg.className = 'msg error'; signupMsg.textContent = data.error || 'Erro ao solicitar';
+          }
+        });
+      }).catch(function() { signupMsg.className = 'msg error'; signupMsg.textContent = 'Erro de conexão'; });
+    });
 
     fetch('/api/me', { credentials: 'include' }).then(function(r) {
       if (r.ok) { window.location.href = '/'; return; }

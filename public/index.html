@@ -410,14 +410,27 @@
     <section id="users" class="section">
       <div class="header">
         <h2>Usuários</h2>
-        <button class="btn btn-primary" onclick="document.getElementById('userModal').classList.add('active')"><i class="ri-user-add-line"></i> Novo usuário</button>
+        <button class="btn btn-primary" onclick="document.getElementById('userModal').classList.add('active')"><i class="ri-user-add-line"></i> Cadastrar usuário</button>
       </div>
       <div class="card">
+        <div class="card-header"><h3 class="card-title"><i class="ri-time-line"></i> Solicitações pendentes (aguardando sua aprovação)</h3></div>
         <div class="card-body">
           <div class="table-container">
             <table>
-              <thead><tr><th>Usuário</th><th>Perfil</th><th>Criado em</th></tr></thead>
-              <tbody id="usersTable"><tr><td colspan="3" class="loading"><div class="spinner"></div></td></tr></tbody>
+              <thead><tr><th>Usuário</th><th>Data da solicitação</th><th>Ações</th></tr></thead>
+              <tbody id="usersPendingTable"><tr><td colspan="3" class="loading"><div class="spinner"></div></td></tr></tbody>
+            </table>
+          </div>
+          <p id="usersPendingEmpty" style="display:none; color: var(--text-secondary); padding: 15px 0;">Nenhuma solicitação pendente.</p>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3 class="card-title"><i class="ri-user-line"></i> Usuários ativos</h3></div>
+        <div class="card-body">
+          <div class="table-container">
+            <table>
+              <thead><tr><th>Usuário</th><th>Perfil</th><th>Status</th><th>Criado em</th></tr></thead>
+              <tbody id="usersTable"><tr><td colspan="4" class="loading"><div class="spinner"></div></td></tr></tbody>
             </table>
           </div>
         </div>
@@ -1091,21 +1104,69 @@
     }
 
     async function loadUsers() {
-      const tbody = document.getElementById('usersTable');
-      if (!tbody) return;
-      tbody.innerHTML = '<tr><td colspan="3" class="loading"><div class="spinner"></div></td></tr>';
+      const tbodyPending = document.getElementById('usersPendingTable');
+      const tbodyActive = document.getElementById('usersTable');
+      const emptyPending = document.getElementById('usersPendingEmpty');
+      if (tbodyPending) tbodyPending.innerHTML = '<tr><td colspan="3" class="loading"><div class="spinner"></div></td></tr>';
+      if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div></td></tr>';
       try {
-        const res = await fetch('/api/users', { credentials: 'include' });
-        if (!res.ok) throw new Error();
+        const res = await apiGet('/api/users');
+        if (!res) return;
         const users = await res.json();
-        tbody.innerHTML = users.length === 0 ? '<tr><td colspan="3" style="text-align:center;padding:30px;color:var(--text-secondary)">Nenhum usuário</td></tr>' : users.map(u => `
-          <tr>
-            <td>${u.username}</td>
-            <td><span class="badge ${u.role === 'admin' ? 'badge-danger' : 'badge-info'}">${u.role === 'admin' ? 'Admin' : 'Usuário'}</span></td>
-            <td>${formatDateBR(u.created_at)}</td>
-          </tr>
-        `).join('');
-      } catch (e) { tbody.innerHTML = '<tr><td colspan="3" style="color:var(--danger)">Erro ao carregar</td></tr>'; }
+        const list = Array.isArray(users) ? users : [];
+        const pending = list.filter(u => (u.status || '') === 'pending');
+        const active = list.filter(u => (u.status || 'active') !== 'pending');
+        if (tbodyPending) {
+          if (pending.length === 0) {
+            tbodyPending.innerHTML = '';
+            if (emptyPending) emptyPending.style.display = 'block';
+          } else {
+            if (emptyPending) emptyPending.style.display = 'none';
+            tbodyPending.innerHTML = pending.map(u => `
+              <tr>
+                <td>${u.username}</td>
+                <td>${formatDateBR(u.created_at)}</td>
+                <td>
+                  <button class="btn btn-primary btn-sm" onclick="approveUser(${u.id})"><i class="ri-check-line"></i> Aprovar</button>
+                  <button class="btn btn-danger btn-sm" onclick="rejectUser(${u.id})" style="margin-left:8px"><i class="ri-close-line"></i> Rejeitar</button>
+                </td>
+              </tr>
+            `).join('');
+          }
+        }
+        if (tbodyActive) {
+          tbodyActive.innerHTML = active.length === 0 ? '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text-secondary)">Nenhum usuário ativo</td></tr>' : active.map(u => `
+            <tr>
+              <td>${u.username}</td>
+              <td><span class="badge ${u.role === 'admin' ? 'badge-danger' : 'badge-info'}">${u.role === 'admin' ? 'Admin' : 'Usuário'}</span></td>
+              <td><span class="badge badge-success">Ativo</span></td>
+              <td>${formatDateBR(u.created_at)}</td>
+            </tr>
+          `).join('');
+        }
+      } catch (e) {
+        if (tbodyPending) tbodyPending.innerHTML = '<tr><td colspan="3" style="color:var(--danger)">Erro ao carregar</td></tr>';
+        if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="4" style="color:var(--danger)">Erro ao carregar</td></tr>';
+      }
+    }
+
+    async function approveUser(id) {
+      try {
+        const res = await fetch('/api/users/' + id + '/approve', { method: 'POST', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) throw new Error();
+        loadUsers();
+      } catch (e) {}
+    }
+
+    async function rejectUser(id) {
+      if (!confirm('Rejeitar esta solicitação? O usuário será removido.')) return;
+      try {
+        const res = await fetch('/api/users/' + id + '/reject', { method: 'POST', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) throw new Error();
+        loadUsers();
+      } catch (e) {}
     }
 
     async function createUser() {
