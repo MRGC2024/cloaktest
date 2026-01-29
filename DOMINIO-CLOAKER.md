@@ -4,6 +4,19 @@ Cada usuário cadastrado pode configurar **seu próprio domínio** no painel. As
 
 ---
 
+## Como integrar um novo domínio (4 passos)
+
+| Passo | O que fazer |
+|-------|-------------|
+| **1** | No **DNS** do seu domínio (onde você gerencia os registros), crie um registro **CNAME**: **Nome** = subdomínio (ex: `cloaker`) → **Destino** = endereço do servidor do painel (ex: `seu-app.up.railway.app`). |
+| **2** | Aguarde a propagação do DNS (alguns minutos até 48h). Teste com `nslookup cloaker.seudominio.com`. |
+| **3** | No painel do Cloaker, faça login e vá em **Configurações** → **Meu domínio do Cloaker**. |
+| **4** | No campo **URL base do seu Cloaker**, digite a URL completa (ex: `https://cloaker.seudominio.com`) **sem barra no final** e clique em **Salvar**. |
+
+Pronto. A partir daí, todos os links que você gerar (em Meus Sites e Link para Ads) usarão esse domínio. **Cada usuário** configura o domínio **da própria conta**; o que você salva vale só para você.
+
+---
+
 ## Resumo
 
 1. Você tem um domínio (ex: `minhaempresa.com`).

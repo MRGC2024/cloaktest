@@ -110,6 +110,7 @@ async function initDb() {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       site_id TEXT UNIQUE,
       link_code TEXT UNIQUE,
+      user_id INTEGER,
       name TEXT,
       domain TEXT,
       target_url TEXT,
@@ -127,6 +128,12 @@ async function initDb() {
   `);
   try { db.run('ALTER TABLE sites ADD COLUMN link_code TEXT'); } catch (e) {}
   try { db.run('ALTER TABLE sites ADD COLUMN target_url TEXT'); } catch (e) {}
+  try { db.run('ALTER TABLE sites ADD COLUMN user_id INTEGER'); } catch (e) {}
+  // Atribuir sites existentes ao primeiro admin (para migração)
+  const firstAdmin = get('SELECT id FROM users WHERE role = ? ORDER BY id ASC LIMIT 1', ['admin']);
+  if (firstAdmin) {
+    run('UPDATE sites SET user_id = ? WHERE user_id IS NULL', [firstAdmin.id]);
+  }
 
   db.run(`
     CREATE TABLE IF NOT EXISTS visitors (
@@ -247,7 +254,11 @@ app.post('/api/login', (req, res) => {
   if (!username || !password) return res.status(400).json({ error: 'Usuário e senha obrigatórios' });
   const user = get('SELECT id, username, role, status, password_hash FROM users WHERE username = ?', [username.trim()]);
   if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: 'Usuário ou senha inválidos' });
-  if ((user.status || 'active') !== 'active') return res.status(403).json({ error: 'Conta aguardando aprovação do administrador.' });
+  const status = user.status || 'active';
+  if (status === 'pending') return res.status(403).json({ error: 'Conta aguardando aprovação do administrador.' });
+  if (status === 'banned') return res.status(403).json({ error: 'Conta bloqueada pelo administrador.' });
+  if (status === 'paused') return res.status(403).json({ error: 'Conta pausada. Entre em contato com o administrador.' });
+  if (status !== 'active') return res.status(403).json({ error: 'Conta inativa.' });
   req.session.userId = user.id;
   req.session.userRole = user.role;
   res.json({ success: true, user: { id: user.id, username: user.username, role: user.role } });
@@ -346,6 +357,76 @@ app.post('/api/users/:id/reject', (req, res) => {
   const id = parseInt(req.params.id, 10);
   if (!id) return res.status(400).json({ error: 'ID inválido' });
   run('DELETE FROM users WHERE id = ? AND status = ?', [id, 'pending']);
+  res.json({ success: true });
+});
+
+// API: Excluir usuário (admin) – remove usuário e seus sites/visitantes
+app.delete('/api/users/:id', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  if (id === req.session.userId) return res.status(400).json({ error: 'Você não pode excluir sua própria conta.' });
+  const user = get('SELECT id FROM users WHERE id = ?', [id]);
+  if (!user) return res.status(404).json({ error: 'Usuário não encontrado' });
+  const siteIds = all('SELECT site_id FROM sites WHERE user_id = ?', [id]).map(r => r.site_id);
+  siteIds.forEach(sid => {
+    run('DELETE FROM visitors WHERE site_id = ?', [sid]);
+    run('DELETE FROM sites WHERE site_id = ?', [sid]);
+  });
+  run('DELETE FROM users WHERE id = ?', [id]);
+  res.json({ success: true });
+});
+
+// API: Banir usuário (admin) – status = banned (não pode fazer login)
+app.post('/api/users/:id/ban', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  if (id === req.session.userId) return res.status(400).json({ error: 'Você não pode banir sua própria conta.' });
+  run('UPDATE users SET status = ? WHERE id = ?', ['banned', id]);
+  const u = get('SELECT id, username, role, status, created_at FROM users WHERE id = ?', [id]);
+  res.json(u || { success: true });
+});
+
+// API: Pausar usuário (admin) – status = paused
+app.post('/api/users/:id/pause', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  if (id === req.session.userId) return res.status(400).json({ error: 'Você não pode pausar sua própria conta.' });
+  run('UPDATE users SET status = ? WHERE id = ?', ['paused', id]);
+  const u = get('SELECT id, username, role, status, created_at FROM users WHERE id = ?', [id]);
+  res.json(u || { success: true });
+});
+
+// API: Ativar usuário (admin) – status = active
+app.post('/api/users/:id/activate', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'ID inválido' });
+  run('UPDATE users SET status = ? WHERE id = ?', ['active', id]);
+  const u = get('SELECT id, username, role, status, created_at FROM users WHERE id = ?', [id]);
+  res.json(u || { success: true });
+});
+
+// API: Alterar senha do usuário (admin)
+app.put('/api/users/:id/password', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const admin = get('SELECT role FROM users WHERE id = ?', [req.session.userId]);
+  if (!admin || admin.role !== 'admin') return res.status(403).json({ error: 'Acesso negado' });
+  const id = parseInt(req.params.id, 10);
+  const { password } = req.body || {};
+  if (!id || !password || password.length < 6) return res.status(400).json({ error: 'Senha com pelo menos 6 caracteres obrigatória.' });
+  const hash = bcrypt.hashSync(password, 10);
+  run('UPDATE users SET password_hash = ? WHERE id = ?', [hash, id]);
   res.json({ success: true });
 });
 
@@ -494,15 +575,24 @@ app.post('/api/track', (req, res) => {
   }
 });
 
-// API: Listar sites
+// Helper: IDs dos sites do usuário logado (cada usuário vê só seus sites)
+function getMySiteIds(userId) {
+  const rows = all('SELECT site_id FROM sites WHERE user_id = ?', [userId]);
+  return rows.map(r => r.site_id).filter(Boolean);
+}
+
+// API: Listar sites (apenas do usuário logado)
 app.get('/api/sites', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const userId = req.session.userId;
   const sites = all(`
     SELECT s.*, 
            (SELECT COUNT(*) FROM visitors WHERE site_id = s.site_id) as total_visits,
            (SELECT COUNT(*) FROM visitors WHERE site_id = s.site_id AND was_blocked = 1) as blocked_visits
     FROM sites s 
-    ORDER BY created_at DESC
-  `);
+    WHERE s.user_id = ?
+    ORDER BY s.created_at DESC
+  `, [userId]);
   res.json(sites);
 });
 
@@ -514,18 +604,18 @@ function generateLinkCode() {
   return code;
 }
 
-// API: Criar site (padrão: apenas Brasil; gera link para usar nos Ads)
+// API: Criar site (padrão: apenas Brasil; gera link para usar nos Ads) – pertence ao usuário logado
 app.post('/api/sites', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
   const { name, domain, target_url, redirect_url, allowed_countries } = req.body;
   const siteId = 'site_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   const linkCode = generateLinkCode();
   const countries = allowed_countries !== undefined ? allowed_countries : 'BR';
   const target = (target_url || '').trim() || null;
-  
+  const userId = req.session.userId;
   try {
-    run(`INSERT INTO sites (site_id, link_code, name, domain, target_url, redirect_url, allowed_countries, block_desktop, block_facebook_library, block_bots, block_vpn, block_devtools, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, datetime('now'))`,
-      [siteId, linkCode, name, domain, target, redirect_url || 'https://www.google.com/', countries]);
-    
+    run(`INSERT INTO sites (site_id, link_code, user_id, name, domain, target_url, redirect_url, allowed_countries, block_desktop, block_facebook_library, block_bots, block_vpn, block_devtools, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1, 1, datetime('now'))`,
+      [siteId, linkCode, userId, name, domain, target, redirect_url || 'https://www.google.com/', countries]);
     const site = get('SELECT * FROM sites WHERE site_id = ?', [siteId]);
     res.json(site);
   } catch (error) {
@@ -533,12 +623,15 @@ app.post('/api/sites', (req, res) => {
   }
 });
 
-// API: Atualizar site (se não tiver link_code, gera um)
+// API: Atualizar site (apenas se o site pertencer ao usuário)
 app.put('/api/sites/:siteId', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const existing = get('SELECT link_code, user_id FROM sites WHERE site_id = ?', [req.params.siteId]);
+  if (!existing) return res.status(404).json({ error: 'Site não encontrado' });
+  if (existing.user_id != null && Number(existing.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'Acesso negado a este site' });
   const data = req.body;
   try {
-    const existing = get('SELECT link_code FROM sites WHERE site_id = ?', [req.params.siteId]);
-    let linkCode = existing?.link_code;
+    let linkCode = existing.link_code;
     if (!linkCode) linkCode = generateLinkCode();
     run(`
       UPDATE sites SET
@@ -560,8 +653,12 @@ app.put('/api/sites/:siteId', (req, res) => {
   }
 });
 
-// API: Deletar site
+// API: Deletar site (apenas se pertencer ao usuário)
 app.delete('/api/sites/:siteId', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const site = get('SELECT user_id FROM sites WHERE site_id = ?', [req.params.siteId]);
+  if (!site) return res.status(404).json({ error: 'Site não encontrado' });
+  if (site.user_id != null && Number(site.user_id) !== Number(req.session.userId)) return res.status(403).json({ error: 'Acesso negado' });
   try {
     run('DELETE FROM visitors WHERE site_id = ?', [req.params.siteId]);
     run('DELETE FROM sites WHERE site_id = ?', [req.params.siteId]);
@@ -571,26 +668,35 @@ app.delete('/api/sites/:siteId', (req, res) => {
   }
 });
 
-// API: Listar visitantes
+// API: Listar visitantes (apenas dos sites do usuário)
 app.get('/api/visitors', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const userId = req.session.userId;
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
   const offset = (page - 1) * limit;
   const filter = req.query.filter || 'all';
   const siteId = req.query.site || null;
 
-  let where = [];
-  if (siteId && siteId !== 'all') where.push(`site_id = '${siteId}'`);
-  if (filter === 'blocked') where.push('was_blocked = 1');
-  else if (filter === 'allowed') where.push('was_blocked = 0');
-  else if (filter === 'bots') where.push('is_bot = 1');
-  else if (filter === 'mobile') where.push("device_type IN ('mobile', 'tablet')");
-  else if (filter === 'desktop') where.push("(device_type = 'desktop' OR device_type IS NULL)");
+  let where = ["v.site_id IN (SELECT site_id FROM sites WHERE user_id = ?)"];
+  const params = [userId];
+  if (siteId && siteId !== 'all') {
+    const myIds = getMySiteIds(userId);
+    if (!myIds.includes(siteId)) {
+      return res.json({ visitors: [], total: 0, page: 1, pages: 0 });
+    }
+    where.push('v.site_id = ?');
+    params.push(siteId);
+  }
+  if (filter === 'blocked') where.push('v.was_blocked = 1');
+  else if (filter === 'allowed') where.push('v.was_blocked = 0');
+  else if (filter === 'bots') where.push('v.is_bot = 1');
+  else if (filter === 'mobile') where.push("v.device_type IN ('mobile', 'tablet')");
+  else if (filter === 'desktop') where.push("(v.device_type = 'desktop' OR v.device_type IS NULL)");
 
-  const whereClause = where.length > 0 ? 'WHERE ' + where.join(' AND ') : '';
-
-  const visitors = all(`SELECT * FROM visitors ${whereClause} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`);
-  const total = get(`SELECT COUNT(*) as count FROM visitors ${whereClause}`);
+  const whereClause = 'WHERE ' + where.join(' AND ');
+  const visitors = all(`SELECT v.* FROM visitors v ${whereClause} ORDER BY v.created_at DESC LIMIT ${limit} OFFSET ${offset}`, params);
+  const total = get(`SELECT COUNT(*) as count FROM visitors v ${whereClause}`, params);
 
   res.json({
     visitors,
@@ -600,70 +706,79 @@ app.get('/api/visitors', (req, res) => {
   });
 });
 
-// API: Estatísticas (período por dia: hoje, ontem, 7, 15, 30 dias)
+// API: Estatísticas (apenas dos sites do usuário)
 app.get('/api/stats', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const userId = req.session.userId;
   const period = req.query.period || 'today';
   const siteId = req.query.site || null;
   
   let dateCondition = '';
   switch (period) {
-    case 'today':   dateCondition = "created_at >= date('now') AND created_at <= datetime('now')"; break;
-    case 'yesterday': dateCondition = "created_at >= date('now', '-1 day') AND created_at < date('now')"; break;
-    case '7d':      dateCondition = "created_at >= datetime('now', '-7 days')"; break;
-    case '15d':     dateCondition = "created_at >= datetime('now', '-15 days')"; break;
-    case '30d':     dateCondition = "created_at >= datetime('now', '-30 days')"; break;
-    default:       dateCondition = "created_at >= date('now') AND created_at <= datetime('now')";
+    case 'today':   dateCondition = "v.created_at >= date('now') AND v.created_at <= datetime('now')"; break;
+    case 'yesterday': dateCondition = "v.created_at >= date('now', '-1 day') AND v.created_at < date('now')"; break;
+    case '7d':      dateCondition = "v.created_at >= datetime('now', '-7 days')"; break;
+    case '15d':     dateCondition = "v.created_at >= datetime('now', '-15 days')"; break;
+    case '30d':     dateCondition = "v.created_at >= datetime('now', '-30 days')"; break;
+    default:       dateCondition = "v.created_at >= date('now') AND v.created_at <= datetime('now')";
   }
 
-  const siteFilter = siteId && siteId !== 'all' ? ` AND site_id = '${siteId}'` : '';
-  const baseWhere = `WHERE (${dateCondition})${siteFilter}`;
+  const userSites = "v.site_id IN (SELECT site_id FROM sites WHERE user_id = ?)";
+  const siteFilter = siteId && siteId !== 'all' ? " AND v.site_id = ?" : '';
+  const params = siteId && siteId !== 'all' ? [userId, siteId] : [userId];
+  const baseWhere = `FROM visitors v WHERE (${dateCondition}) AND ${userSites}${siteFilter}`;
 
   const stats = {
-    total: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere}`)?.count || 0,
-    blocked: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere} AND was_blocked = 1`)?.count || 0,
-    allowed: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere} AND was_blocked = 0`)?.count || 0,
-    bots: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere} AND is_bot = 1`)?.count || 0,
-    mobile: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere} AND device_type IN ('mobile', 'tablet')`)?.count || 0,
-    desktop: get(`SELECT COUNT(*) as count FROM visitors ${baseWhere} AND (device_type = 'desktop' OR device_type IS NULL)`)?.count || 0,
+    total: get(`SELECT COUNT(*) as count ${baseWhere}`, params)?.count || 0,
+    blocked: get(`SELECT COUNT(*) as count ${baseWhere} AND v.was_blocked = 1`, params)?.count || 0,
+    allowed: get(`SELECT COUNT(*) as count ${baseWhere} AND v.was_blocked = 0`, params)?.count || 0,
+    bots: get(`SELECT COUNT(*) as count ${baseWhere} AND v.is_bot = 1`, params)?.count || 0,
+    mobile: get(`SELECT COUNT(*) as count ${baseWhere} AND v.device_type IN ('mobile', 'tablet')`, params)?.count || 0,
+    desktop: get(`SELECT COUNT(*) as count ${baseWhere} AND (v.device_type = 'desktop' OR v.device_type IS NULL)`, params)?.count || 0,
     
-    byBrowser: all(`SELECT browser, COUNT(*) as count FROM visitors ${baseWhere} AND browser IS NOT NULL GROUP BY browser ORDER BY count DESC LIMIT 10`),
-    byOS: all(`SELECT os, COUNT(*) as count FROM visitors ${baseWhere} AND os IS NOT NULL GROUP BY os ORDER BY count DESC LIMIT 10`),
-    byCountry: all(`SELECT country, COUNT(*) as count FROM visitors ${baseWhere} AND country IS NOT NULL GROUP BY country ORDER BY count DESC LIMIT 10`),
-    byReferrer: all(`SELECT referrer, COUNT(*) as count FROM visitors ${baseWhere} AND referrer IS NOT NULL AND referrer != '' GROUP BY referrer ORDER BY count DESC LIMIT 10`),
-    byHour: all(`SELECT strftime('%Y-%m-%d %H:00', created_at) as hour, COUNT(*) as total, SUM(CASE WHEN was_blocked = 1 THEN 1 ELSE 0 END) as blocked, SUM(CASE WHEN was_blocked = 0 THEN 1 ELSE 0 END) as allowed FROM visitors ${baseWhere} GROUP BY hour ORDER BY hour DESC LIMIT 24`),
-    blockReasons: all(`SELECT block_reason, COUNT(*) as count FROM visitors ${baseWhere} AND was_blocked = 1 AND block_reason IS NOT NULL GROUP BY block_reason ORDER BY count DESC`),
-    bySite: all(`SELECT site_id, COUNT(*) as count FROM visitors WHERE (${dateCondition}) GROUP BY site_id ORDER BY count DESC`)
+    byBrowser: all(`SELECT v.browser as browser, COUNT(*) as count ${baseWhere} AND v.browser IS NOT NULL GROUP BY v.browser ORDER BY count DESC LIMIT 10`, params),
+    byOS: all(`SELECT v.os as os, COUNT(*) as count ${baseWhere} AND v.os IS NOT NULL GROUP BY v.os ORDER BY count DESC LIMIT 10`, params),
+    byCountry: all(`SELECT v.country as country, COUNT(*) as count ${baseWhere} AND v.country IS NOT NULL GROUP BY v.country ORDER BY count DESC LIMIT 10`, params),
+    byReferrer: all(`SELECT v.referrer as referrer, COUNT(*) as count ${baseWhere} AND v.referrer IS NOT NULL AND v.referrer != '' GROUP BY v.referrer ORDER BY count DESC LIMIT 10`, params),
+    byHour: all(`SELECT strftime('%Y-%m-%d %H:00', v.created_at) as hour, COUNT(*) as total, SUM(CASE WHEN v.was_blocked = 1 THEN 1 ELSE 0 END) as blocked, SUM(CASE WHEN v.was_blocked = 0 THEN 1 ELSE 0 END) as allowed ${baseWhere} GROUP BY hour ORDER BY hour DESC LIMIT 24`, params),
+    blockReasons: all(`SELECT v.block_reason as block_reason, COUNT(*) as count ${baseWhere} AND v.was_blocked = 1 AND v.block_reason IS NOT NULL GROUP BY v.block_reason ORDER BY count DESC`, params),
+    bySite: all(`SELECT v.site_id as site_id, COUNT(*) as count FROM visitors v WHERE v.site_id IN (SELECT site_id FROM sites WHERE user_id = ?) AND (${dateCondition}) GROUP BY v.site_id ORDER BY count DESC`, [userId])
   };
 
   res.json(stats);
 });
 
-// API: Detalhes de um visitante
+// API: Detalhes de um visitante (apenas se o visitante for de um site do usuário)
 app.get('/api/visitors/:id', (req, res) => {
-  const visitor = get('SELECT * FROM visitors WHERE id = ?', [req.params.id]);
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const visitor = get('SELECT v.* FROM visitors v INNER JOIN sites s ON s.site_id = v.site_id AND s.user_id = ? WHERE v.id = ?', [req.session.userId, req.params.id]);
   if (!visitor) return res.status(404).json({ error: 'Visitante não encontrado' });
   res.json(visitor);
 });
 
-// API: Deletar visitantes
+// API: Deletar visitantes (apenas dos sites do usuário)
 app.delete('/api/visitors', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
   const { ids } = req.body;
   if (ids && ids.length > 0) {
-    run(`DELETE FROM visitors WHERE id IN (${ids.join(',')})`);
+    const placeholders = ids.map(() => '?').join(',');
+    run(`DELETE FROM visitors WHERE id IN (${placeholders}) AND site_id IN (SELECT site_id FROM sites WHERE user_id = ?)`, [...ids, req.session.userId]);
   }
   res.json({ success: true });
 });
 
-// API: Limpar todos os dados
+// API: Limpar todos os dados (apenas visitantes dos sites do usuário)
 app.delete('/api/visitors/all', (req, res) => {
-  run('DELETE FROM visitors');
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  run('DELETE FROM visitors WHERE site_id IN (SELECT site_id FROM sites WHERE user_id = ?)', [req.session.userId]);
   res.json({ success: true });
 });
 
-// API: Exportar dados
+// API: Exportar dados (apenas visitantes dos sites do usuário)
 app.get('/api/export', (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  const visitors = all('SELECT v.* FROM visitors v INNER JOIN sites s ON s.site_id = v.site_id AND s.user_id = ? ORDER BY v.created_at DESC', [req.session.userId]);
   const format = req.query.format || 'json';
-  const visitors = all('SELECT * FROM visitors ORDER BY created_at DESC');
   
   if (format === 'csv') {
     if (visitors.length === 0) return res.send('');

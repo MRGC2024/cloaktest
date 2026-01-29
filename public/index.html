@@ -445,18 +445,37 @@
         </div>
       </div>
       <div class="card">
-        <div class="card-header"><h3 class="card-title"><i class="ri-user-line"></i> Usuários ativos</h3></div>
+        <div class="card-header"><h3 class="card-title"><i class="ri-user-line"></i> Usuários (ativos, pausados e bloqueados)</h3></div>
         <div class="card-body">
           <div class="table-container">
             <table>
-              <thead><tr><th>Usuário</th><th>Perfil</th><th>Status</th><th>Criado em</th></tr></thead>
-              <tbody id="usersTable"><tr><td colspan="4" class="loading"><div class="spinner"></div></td></tr></tbody>
+              <thead><tr><th>Usuário</th><th>Perfil</th><th>Status</th><th>Criado em</th><th>Ações</th></tr></thead>
+              <tbody id="usersTable"><tr><td colspan="5" class="loading"><div class="spinner"></div></td></tr></tbody>
             </table>
           </div>
         </div>
       </div>
     </section>
   </main>
+
+  <!-- Modal Alterar senha (admin) -->
+  <div class="modal" id="changePasswordModal">
+    <div class="modal-content" style="max-width: 400px;">
+      <div class="modal-header">
+        <h3>Alterar senha</h3>
+        <button class="modal-close" onclick="closeChangePasswordModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="margin-bottom:15px;color:var(--text-secondary)">Usuário: <strong id="changePasswordUsername"></strong></p>
+        <div class="form-group">
+          <label class="form-label">Nova senha (mín. 6 caracteres)</label>
+          <input type="password" class="form-input" id="changePasswordNew" placeholder="••••••••">
+        </div>
+        <button class="btn btn-primary" onclick="submitChangePassword()"><i class="ri-save-line"></i> Salvar</button>
+        <button class="btn btn-secondary" onclick="closeChangePasswordModal()" style="margin-left:10px">Cancelar</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Modal Novo usuário -->
   <div class="modal" id="userModal">
@@ -1123,19 +1142,28 @@
       } catch (e) { msg.textContent = 'Erro ao salvar.'; msg.style.color = 'var(--danger)'; }
     }
 
+    function userStatusBadge(status) {
+      const s = (status || 'active').toLowerCase();
+      if (s === 'active') return '<span class="badge badge-success">Ativo</span>';
+      if (s === 'pending') return '<span class="badge badge-warning">Pendente</span>';
+      if (s === 'banned') return '<span class="badge badge-danger">Bloqueado</span>';
+      if (s === 'paused') return '<span class="badge badge-warning">Pausado</span>';
+      return '<span class="badge badge-info">' + (status || 'Ativo') + '</span>';
+    }
+
     async function loadUsers() {
       const tbodyPending = document.getElementById('usersPendingTable');
       const tbodyActive = document.getElementById('usersTable');
       const emptyPending = document.getElementById('usersPendingEmpty');
       if (tbodyPending) tbodyPending.innerHTML = '<tr><td colspan="3" class="loading"><div class="spinner"></div></td></tr>';
-      if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="4" class="loading"><div class="spinner"></div></td></tr>';
+      if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="5" class="loading"><div class="spinner"></div></td></tr>';
       try {
         const res = await apiGet('/api/users');
         if (!res) return;
         const users = await res.json();
         const list = Array.isArray(users) ? users : [];
         const pending = list.filter(u => (u.status || '') === 'pending');
-        const active = list.filter(u => (u.status || 'active') !== 'pending');
+        const notPending = list.filter(u => (u.status || '') !== 'pending');
         if (tbodyPending) {
           if (pending.length === 0) {
             tbodyPending.innerHTML = '';
@@ -1155,19 +1183,102 @@
           }
         }
         if (tbodyActive) {
-          tbodyActive.innerHTML = active.length === 0 ? '<tr><td colspan="4" style="text-align:center;padding:30px;color:var(--text-secondary)">Nenhum usuário ativo</td></tr>' : active.map(u => `
+          const meId = (currentUser && currentUser.id) ? currentUser.id : null;
+          tbodyActive.innerHTML = notPending.length === 0 ? '<tr><td colspan="5" style="text-align:center;padding:30px;color:var(--text-secondary)">Nenhum usuário</td></tr>' : notPending.map(u => {
+            const status = u.status || 'active';
+            const isSelf = (meId && parseInt(u.id, 10) === parseInt(meId, 10));
+            let actions = '';
+            if (!isSelf) {
+              actions += '<button class="btn btn-secondary btn-sm" onclick="openChangePasswordModal(' + u.id + ', \'' + (u.username || '').replace(/'/g, "\\'") + '\')" title="Alterar senha"><i class="ri-key-line"></i></button> ';
+              if (status === 'active') {
+                actions += '<button class="btn btn-sm" style="background:var(--warning);color:#000" onclick="pauseUser(' + u.id + ')" title="Pausar"><i class="ri-pause-line"></i></button> ';
+                actions += '<button class="btn btn-danger btn-sm" onclick="banUser(' + u.id + ')" title="Banir"><i class="ri-forbid-line"></i></button> ';
+              } else {
+                actions += '<button class="btn btn-primary btn-sm" onclick="activateUser(' + u.id + ')" title="Ativar"><i class="ri-play-line"></i></button> ';
+              }
+              actions += '<button class="btn btn-danger btn-sm" onclick="deleteUser(' + u.id + ', \'' + (u.username || '').replace(/'/g, "\\'") + '\')" title="Excluir usuário"><i class="ri-delete-bin-line"></i></button>';
+            } else {
+              actions = '<span style="color:var(--text-secondary);font-size:12px">(você)</span>';
+            }
+            return `
             <tr>
               <td>${u.username}</td>
               <td><span class="badge ${u.role === 'admin' ? 'badge-danger' : 'badge-info'}">${u.role === 'admin' ? 'Admin' : 'Usuário'}</span></td>
-              <td><span class="badge badge-success">Ativo</span></td>
+              <td>${userStatusBadge(status)}</td>
               <td>${formatDateBR(u.created_at)}</td>
+              <td style="white-space:nowrap">${actions}</td>
             </tr>
-          `).join('');
+          `;
+          }).join('');
         }
       } catch (e) {
         if (tbodyPending) tbodyPending.innerHTML = '<tr><td colspan="3" style="color:var(--danger)">Erro ao carregar</td></tr>';
-        if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="4" style="color:var(--danger)">Erro ao carregar</td></tr>';
+        if (tbodyActive) tbodyActive.innerHTML = '<tr><td colspan="5" style="color:var(--danger)">Erro ao carregar</td></tr>';
       }
+    }
+
+    function openChangePasswordModal(userId, username) {
+      window._passwordUserId = userId;
+      document.getElementById('changePasswordUsername').textContent = username || '';
+      document.getElementById('changePasswordNew').value = '';
+      document.getElementById('changePasswordModal').classList.add('active');
+    }
+
+    function closeChangePasswordModal() {
+      document.getElementById('changePasswordModal').classList.remove('active');
+    }
+
+    async function submitChangePassword() {
+      const userId = window._passwordUserId;
+      const newPass = document.getElementById('changePasswordNew').value;
+      if (!newPass || newPass.length < 6) { alert('Senha com pelo menos 6 caracteres.'); return; }
+      try {
+        const res = await fetch('/api/users/' + userId + '/password', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ password: newPass }) });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'Erro'); }
+        closeChangePasswordModal();
+        loadUsers();
+        alert('Senha alterada.');
+      } catch (e) { alert(e.message || 'Erro ao alterar senha.'); }
+    }
+
+    async function banUser(id) {
+      if (!confirm('Banir este usuário? Ele não poderá mais fazer login.')) return;
+      try {
+        const res = await fetch('/api/users/' + id + '/ban', { method: 'POST', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) { const d = await res.json(); alert(d.error || 'Erro'); return; }
+        loadUsers();
+      } catch (e) {}
+    }
+
+    async function pauseUser(id) {
+      if (!confirm('Pausar este usuário? Ele não poderá fazer login até você ativá-lo novamente.')) return;
+      try {
+        const res = await fetch('/api/users/' + id + '/pause', { method: 'POST', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) { const d = await res.json(); alert(d.error || 'Erro'); return; }
+        loadUsers();
+      } catch (e) {}
+    }
+
+    async function activateUser(id) {
+      try {
+        const res = await fetch('/api/users/' + id + '/activate', { method: 'POST', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) { const d = await res.json(); alert(d.error || 'Erro'); return; }
+        loadUsers();
+      } catch (e) {}
+    }
+
+    async function deleteUser(id, username) {
+      if (!confirm('Excluir o usuário "' + username + '"? Todos os sites e visitantes dele serão removidos. Esta ação não pode ser desfeita.')) return;
+      try {
+        const res = await fetch('/api/users/' + id, { method: 'DELETE', credentials: 'include' });
+        if (res.status === 401) { window.location.href = '/login'; return; }
+        if (!res.ok) { const d = await res.json(); alert(d.error || 'Erro'); return; }
+        loadUsers();
+      } catch (e) {}
     }
 
     async function approveUser(id) {
@@ -1231,6 +1342,7 @@
     document.getElementById('visitorModal').addEventListener('click', e => { if (e.target.id === 'visitorModal') closeVisitorModal(); });
     document.getElementById('siteModal').addEventListener('click', e => { if (e.target.id === 'siteModal') closeSiteModal(); });
     document.getElementById('userModal').addEventListener('click', e => { if (e.target.id === 'userModal') document.getElementById('userModal').classList.remove('active'); });
+    document.getElementById('changePasswordModal').addEventListener('click', e => { if (e.target.id === 'changePasswordModal') closeChangePasswordModal(); });
   </script>
 </body>
 </html>
