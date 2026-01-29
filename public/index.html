@@ -405,6 +405,17 @@
         </div>
       </div>
       <div class="card">
+        <div class="card-header"><h3 class="card-title"><i class="ri-radar-line"></i> Verificar propagação</h3></div>
+        <div class="card-body">
+          <p style="color: var(--text-secondary); margin-bottom: 15px;">Depois de configurar o CNAME no seu DNS, use o botão abaixo para testar se o domínio já está propagado e respondendo.</p>
+          <button type="button" class="btn btn-secondary" id="checkPropagationBtn" onclick="checkPropagation()"><i class="ri-search-line"></i> Testar propagação</button>
+          <div id="propagationResult" style="margin-top: 15px; display: none;">
+            <div id="propagationMessage" style="padding: 12px 16px; border-radius: 10px; font-size: 14px;"></div>
+            <pre id="propagationDetails" style="margin-top: 10px; font-size: 12px; color: var(--text-secondary); background: var(--bg-primary); padding: 12px; border-radius: 8px; overflow-x: auto; display: none;"></pre>
+          </div>
+        </div>
+      </div>
+      <div class="card">
         <div class="card-header"><h3 class="card-title"><i class="ri-file-list-3-line"></i> Como associar meu domínio (passo a passo)</h3></div>
         <div class="card-body">
           <ol style="color: var(--text-secondary); line-height: 2; padding-left: 20px; margin-bottom: 15px;">
@@ -1140,6 +1151,55 @@
         msg.style.color = 'var(--success)';
         setTimeout(() => { msg.textContent = ''; }, 3000);
       } catch (e) { msg.textContent = 'Erro ao salvar.'; msg.style.color = 'var(--danger)'; }
+    }
+
+    async function checkPropagation() {
+      const btn = document.getElementById('checkPropagationBtn');
+      const box = document.getElementById('propagationResult');
+      const msgEl = document.getElementById('propagationMessage');
+      const detailsEl = document.getElementById('propagationDetails');
+      const url = (document.getElementById('cloakerBaseUrl').value || '').trim();
+      if (!url) {
+        msgEl.textContent = 'Preencha a URL base do seu Cloaker acima e clique em Salvar antes de testar.';
+        msgEl.style.background = 'rgba(255, 193, 7, 0.2)';
+        msgEl.style.color = 'var(--warning)';
+        box.style.display = 'block';
+        detailsEl.style.display = 'none';
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = '<i class="ri-loader-4-line" style="animation: spin 1s linear infinite;"></i> Verificando...';
+      box.style.display = 'block';
+      msgEl.textContent = 'Consultando DNS e testando resposta...';
+      msgEl.style.background = 'rgba(23, 162, 184, 0.2)';
+      msgEl.style.color = '#17a2b8';
+      detailsEl.style.display = 'none';
+      try {
+        const res = await fetch('/api/settings/check-propagation?url=' + encodeURIComponent(url), { credentials: 'include' });
+        const data = await res.json();
+        if (data.ok) {
+          msgEl.innerHTML = '<i class="ri-checkbox-circle-fill" style="color: var(--success); margin-right: 8px;"></i> ' + (data.message || 'Domínio propagado e respondendo.');
+          msgEl.style.background = 'rgba(0, 217, 165, 0.2)';
+          msgEl.style.color = 'var(--success)';
+        } else {
+          msgEl.innerHTML = '<i class="ri-information-line" style="margin-right: 8px;"></i> ' + (data.message || 'Aguardando propagação.');
+          msgEl.style.background = 'rgba(255, 193, 7, 0.2)';
+          msgEl.style.color = 'var(--warning)';
+        }
+        if (data.details && (data.details.cname?.length || data.details.ips?.length)) {
+          detailsEl.textContent = 'DNS: ' + (data.details.cname?.length ? 'CNAME → ' + data.details.cname.join(', ') : '') + (data.details.ips?.length ? ' | IPs: ' + data.details.ips.join(', ') : '') + ' | Responde: ' + (data.details.reachable ? 'sim' : 'não');
+          detailsEl.style.display = 'block';
+        } else {
+          detailsEl.style.display = 'none';
+        }
+      } catch (e) {
+        msgEl.innerHTML = '<i class="ri-error-warning-line" style="color: var(--danger); margin-right: 8px;"></i> Erro ao verificar. Tente novamente.';
+        msgEl.style.background = 'rgba(220, 53, 69, 0.2)';
+        msgEl.style.color = 'var(--danger)';
+        detailsEl.style.display = 'none';
+      }
+      btn.disabled = false;
+      btn.innerHTML = '<i class="ri-search-line"></i> Testar propagação';
     }
 
     function userStatusBadge(status) {

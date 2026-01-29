@@ -4,6 +4,7 @@ const cors = require('cors');
 const UAParser = require('ua-parser-js');
 const path = require('path');
 const fs = require('fs');
+const dns = require('dns').promises;
 const bcrypt = require('bcryptjs');
 const session = require('express-session');
 
@@ -311,6 +312,66 @@ app.put('/api/settings', (req, res) => {
   const val = (cloaker_base_url != null ? String(cloaker_base_url).trim() : '') || '';
   run('UPDATE users SET cloaker_base_url = ? WHERE id = ?', [val, req.session.userId]);
   res.json({ success: true });
+});
+
+// API: Verificar propagação DNS e se o domínio responde (Configurações)
+app.get('/api/settings/check-propagation', async (req, res) => {
+  if (!req.session || !req.session.userId) return res.status(401).json({ error: 'Não autorizado' });
+  let url = (req.query.url || '').trim();
+  if (!url) {
+    const user = get('SELECT cloaker_base_url FROM users WHERE id = ?', [req.session.userId]);
+    url = (user && user.cloaker_base_url) ? user.cloaker_base_url.trim() : '';
+  }
+  if (!url) return res.status(400).json({ ok: false, message: 'Informe uma URL em "Meu domínio do Cloaker" e salve, ou passe ?url= na consulta.', details: {} });
+
+  let hostname;
+  try {
+    const u = new URL(url.startsWith('http') ? url : 'https://' + url);
+    hostname = u.hostname;
+    if (!hostname) throw new Error('Host inválido');
+  } catch (e) {
+    return res.json({ ok: false, message: 'URL inválida. Use algo como https://energysaver.store', details: {} });
+  }
+
+  const details = { hostname, resolved: false, cname: [], ips: [], reachable: false };
+
+  try {
+    try {
+      const cnames = await dns.resolveCname(hostname);
+      details.cname = Array.isArray(cnames) ? cnames : [cnames];
+      details.resolved = true;
+    } catch (e) {
+      try {
+        const ips = await dns.resolve4(hostname);
+        details.ips = ips || [];
+        details.resolved = details.ips.length > 0;
+      } catch (e2) {
+        details.resolved = false;
+      }
+    }
+
+    const fetchUrl = url.startsWith('http') ? url : 'https://' + url;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const resp = await fetch(fetchUrl, { method: 'GET', redirect: 'follow', signal: controller.signal, headers: { 'User-Agent': 'CloakerPro-PropagationCheck/1.0' } });
+      clearTimeout(timeout);
+      details.reachable = resp.ok || resp.status === 302 || resp.status === 301;
+    } catch (e) {
+      clearTimeout(timeout);
+      details.reachable = false;
+    }
+  } catch (e) {
+    console.error('Check propagation error:', e.message);
+  }
+
+  const ok = details.reachable || (details.resolved && (details.cname.length > 0 || details.ips.length > 0));
+  let message;
+  if (details.reachable) message = 'Domínio está propagado e respondendo. Tudo certo.';
+  else if (details.resolved) message = 'DNS resolveu, mas o domínio ainda não está respondendo. Pode ser propagação em andamento ou SSL/proxy. Tente de novo em alguns minutos.';
+  else message = 'Domínio ainda não resolveu (propagação em andamento ou CNAME incorreto). Aguarde alguns minutos ou confira o registro no seu DNS.';
+
+  res.json({ ok, message, details });
 });
 
 // API: Solicitar conta (público – cria usuário com status pending)
